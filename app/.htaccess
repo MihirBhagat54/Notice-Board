@@ -1,0 +1,12 @@
+# app/.htaccess
+# Block direct HTTP browser requests to this directory.
+# PHP require_once/include calls are filesystem operations and are
+# NOT affected by this — only browser HTTP requests are blocked.
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order deny,allow
+    Deny from all
+</IfModule>
