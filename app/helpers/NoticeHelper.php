@@ -27,16 +27,16 @@ class NoticeHelper
         //   4. scope = Student Grade X AND this user is Student with grade X
         $gradeClause = '';
         if ($role === 'Student' && $grade !== null) {
-            $gradeClause = "OR (s.scopeName = CONCAT('Student Grade ', ?) AND n.targetGrade = ?)";
+            $gradeClause = "OR (ns.scopeName = CONCAT('Student Grade ', ?) AND n.targetGrade = ?)";
             $types      .= 'ss';
             $params[]    = $grade;
             $params[]    = $grade;
         }
 
         $where[]  = "(
-            s.scopeName = 'General'
-            OR (s.scopeName = 'Role Based' AND n.targetRole = ?)
-            OR (s.scopeName = 'Individual' AND n.targetUserID = ?)
+            ns.scopeName = 'General'
+            OR (ns.scopeName = 'Role Based' AND n.targetRole = ?)
+            OR (ns.scopeName = 'Individual' AND n.targetUserID = ?)
             {$gradeClause}
         )";
         $types   .= 'si';
