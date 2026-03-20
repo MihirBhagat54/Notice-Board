@@ -20,7 +20,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($user) {
                 $otp = Auth::generateOTP(6);
                 Auth::saveOTP($user['userID'], $otp);
-                Auth::sendOTPEmail($user['email'], $user['fullName'], $otp);
+                $mailResult = Auth::sendOTPEmail($user['email'], $user['fullName'], $otp);
+                if (!$mailResult['ok']) {
+                    $_SESSION['fp_mail_error'] = $mailResult['error'];
+                }
                 $_SESSION['fp_userID'] = $user['userID'];
                 $_SESSION['fp_email']  = $user['email'];
             }
@@ -110,6 +113,18 @@ $steps = ['email' => 1, 'otp' => 2, 'reset' => 3];
 
       <?php if ($error): ?><div class="alert alert-error"><i class="fa-solid fa-circle-exclamation"></i><?= Utils::sanitize($error) ?></div><?php endif; ?>
       <?php if ($info):  ?><div class="alert alert-info"><i class="fa-solid fa-circle-info"></i><?= Utils::sanitize($info) ?></div><?php endif; ?>
+      <?php
+        $__mailErr = $_SESSION['fp_mail_error'] ?? '';
+        unset($_SESSION['fp_mail_error']);
+      ?>
+      <?php if ($__mailErr && $step === 'otp'): ?>
+      <div class="alert alert-warning"><i class="fa-solid fa-triangle-exclamation"></i>
+        <div><strong>Email delivery failed — OTP could not be sent.</strong><br>
+        SMTP error: <code><?= Utils::sanitize($__mailErr) ?></code><br>
+        <small>Gmail requires a 16-character <strong>App Password</strong>, not your regular password.<br>
+        Go to: myaccount.google.com → Security → 2-Step Verification → App passwords</small></div>
+      </div>
+      <?php endif; ?>
 
       <?php if ($step === 'email'): ?>
         <h2>Forgot Password?</h2>

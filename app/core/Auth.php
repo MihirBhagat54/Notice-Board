@@ -27,13 +27,12 @@ class Auth
         $digits  = '23456789';
         $symbols = '@#$!%';
 
-        $pwd  = '';
+        $pwd = '';
         for ($i = 0; $i < 3; $i++) $pwd .= $upper[random_int(0, strlen($upper) - 1)];
         for ($i = 0; $i < 3; $i++) $pwd .= $lower[random_int(0, strlen($lower) - 1)];
         for ($i = 0; $i < 2; $i++) $pwd .= $digits[random_int(0, strlen($digits) - 1)];
         for ($i = 0; $i < 2; $i++) $pwd .= $symbols[random_int(0, strlen($symbols) - 1)];
 
-        // Shuffle
         $arr = str_split($pwd);
         shuffle($arr);
         return implode('', $arr);
@@ -135,29 +134,45 @@ class Auth
         return true;
     }
 
-    // ── Email helpers ────────────────────────────────────────────
-    public static function sendOTPEmail(string $toEmail, string $toName, string $otp): bool
-    {
+    // ── Email sending ────────────────────────────────────────────
+    //
+    // All send*() methods return an array:
+    //   ['ok' => bool, 'error' => string]
+    //
+    // This lets callers show specific, actionable error messages
+    // to the user rather than silently failing.
+
+    /**
+     * Send a password-reset OTP email.
+     */
+    public static function sendOTPEmail(
+        string $toEmail,
+        string $toName,
+        string $otp
+    ): array {
         $subject = '[' . SITE_NAME . '] Your Password Reset OTP';
         $body    = "Dear {$toName},\n\n"
                  . "Your one-time password (OTP) for account recovery is:\n\n"
-                 . "    {$otp}\n\n"
-                 . "This OTP expires in " . OTP_EXPIRY_MINUTES . " minutes.\n"
+                 . "        {$otp}\n\n"
+                 . "This OTP is valid for " . OTP_EXPIRY_MINUTES . " minutes.\n"
                  . "If you did not request this, please ignore this email.\n\n"
                  . "— " . SITE_NAME . " · " . SITE_SCHOOL;
 
-        return self::sendMail($toEmail, $toName, $subject, $body);
+        return self::deliver($toEmail, $toName, $subject, $body);
     }
 
+    /**
+     * Send a welcome / credential email to a newly created user.
+     */
     public static function sendWelcomeEmail(
-        string $toEmail,
-        string $toName,
-        string $role,
-        string $plainPassword,
+        string  $toEmail,
+        string  $toName,
+        string  $role,
+        string  $plainPassword,
         ?string $grade = null
-    ): bool {
+    ): array {
         $gradeInfo = ($role === 'Student' && $grade)
-            ? "\nGrade      : {$grade}"
+            ? "\n    Grade      : Grade {$grade}"
             : '';
 
         $subject = '[' . SITE_NAME . '] Your Account Has Been Created';
@@ -168,25 +183,40 @@ class Auth
                  . "    Email      : {$toEmail}\n"
                  . "    Password   : {$plainPassword}\n"
                  . "    Role       : {$role}{$gradeInfo}\n\n"
-                 . "For security, please change your password after your first login.\n\n"
-                 . "— " . SITE_NAME . " Team";
+                 . "For your security, please change your password after your first login\n"
+                 . "by going to My Profile → Change Password.\n\n"
+                 . "— " . SITE_NAME . " Team\n"
+                 . "    " . SITE_SCHOOL;
 
-        return self::sendMail($toEmail, $toName, $subject, $body);
+        return self::deliver($toEmail, $toName, $subject, $body);
     }
 
-    private static function sendMail(
+    /**
+     * Core delivery method — uses the custom SMTP Mailer class.
+     * Returns ['ok' => bool, 'error' => string].
+     */
+    private static function deliver(
         string $toEmail,
         string $toName,
         string $subject,
         string $body
-    ): bool {
-        $headers = implode("\r\n", [
-            'From: '         . MAIL_NAME . ' <' . MAIL_FROM . '>',
-            'Reply-To: '     . MAIL_FROM,
-            'X-Mailer: PHP/' . PHP_VERSION,
-            'MIME-Version: 1.0',
-            'Content-Type: text/plain; charset=UTF-8',
-        ]);
-        return mail($toEmail, $subject, $body, $headers);
+    ): array {
+        try {
+            $mailer = new Mailer();
+            $ok     = $mailer->send($toEmail, $toName, $subject, $body);
+
+            if (!$ok) {
+                $err = $mailer->getLastError();
+                error_log("[Auth::deliver] Mail failed to {$toEmail}: {$err}");
+                return ['ok' => false, 'error' => $err];
+            }
+
+            return ['ok' => true, 'error' => ''];
+
+        } catch (Throwable $e) {
+            $msg = $e->getMessage();
+            error_log("[Auth::deliver] Unexpected exception: {$msg}");
+            return ['ok' => false, 'error' => $msg];
+        }
     }
 }

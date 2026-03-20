@@ -40,10 +40,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'create_student') {
                 $fullName, $email, $hash, $salt, 'Student', $grade, $phoneNo, $currentUID
             );
 
-            Auth::sendWelcomeEmail($email, $fullName, 'Student', $plainPwd, $grade);
-            Utils::flash('success',
-                "Student account for \"{$fullName}\" (Grade {$grade}) created. Credentials emailed to {$email}."
-            );
+            $mailResult = Auth::sendWelcomeEmail($email, $fullName, 'Student', $plainPwd, $grade);
+            if ($mailResult['ok']) {
+                Utils::flash('success',
+                    "Student account for \"{$fullName}\" (Grade {$grade}) created. Credentials emailed to {$email}."
+                );
+            } else {
+                $_SESSION['credential_fallback'] = [
+                    'name'      => $fullName,
+                    'email'     => $email,
+                    'password'  => $plainPwd,
+                    'role'      => 'Student',
+                    'grade'     => $grade,
+                    'smtpError' => $mailResult['error'],
+                ];
+                Utils::flash('warning',
+                    "Account created but email failed. Credentials shown below — share manually."
+                );
+            }
             Utils::redirect('public/teacher/users.php');
         }
     }
@@ -65,10 +79,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'create_student') {
                 'UPDATE users SET password=?, salt=?, lastPasswordChangedAt=NOW() WHERE userID=?',
                 'ssi', $hash, $salt, $targetID
             );
-            Auth::sendWelcomeEmail(
+            $mailResult = Auth::sendWelcomeEmail(
                 $target['email'], $target['fullName'], 'Student', $plainPwd, $target['grade']
             );
-            Utils::flash('success', "New credentials generated and emailed to {$target['email']}.");
+            if ($mailResult['ok']) {
+                Utils::flash('success', "New credentials generated and emailed to {$target['email']}.");
+            } else {
+                $_SESSION['credential_fallback'] = [
+                    'name'      => $target['fullName'],
+                    'email'     => $target['email'],
+                    'password'  => $plainPwd,
+                    'role'      => 'Student',
+                    'grade'     => $target['grade'],
+                    'smtpError' => $mailResult['error'],
+                ];
+                Utils::flash('warning', "Credentials reset but email failed. Credentials shown below.");
+            }
         }
         Utils::redirect('public/teacher/users.php');
     }
@@ -131,6 +157,38 @@ require_once ROOT_PATH . 'app/core/header.php';
 
 <?php $f = Utils::flash('success'); if ($f): ?>
   <div class="alert alert-success fade-up"><i class="fa-solid fa-circle-check"></i><?= Utils::sanitize($f) ?></div>
+<?php endif; ?>
+<?php $fw = Utils::flash('warning'); if ($fw): ?>
+  <div class="alert alert-warning fade-up"><i class="fa-solid fa-triangle-exclamation"></i><?= Utils::sanitize($fw) ?></div>
+<?php endif; ?>
+<?php
+$__cred = $_SESSION['credential_fallback'] ?? null;
+unset($_SESSION['credential_fallback']);
+?>
+<?php if ($__cred): ?>
+<div class="card fade-up" style="border:2px solid var(--amber);margin-bottom:20px;">
+  <div class="card-header" style="background:rgba(232,168,49,.08);">
+    <h2 style="color:var(--amber-dk);"><i class="fa-solid fa-envelope-open-text" style="margin-right:8px;"></i>Manual Credential Delivery Required</h2>
+  </div>
+  <div class="card-body">
+    <p style="font-size:13.5px;color:var(--text-muted);margin-bottom:16px;">
+      The account was created but the welcome email could not be delivered. Share these credentials with the student directly.
+    </p>
+    <div style="background:var(--navy);border-radius:var(--r-md);padding:20px 24px;font-family:var(--font-mono);font-size:13.5px;color:var(--white);line-height:2;">
+      <div><span style="color:var(--amber);min-width:110px;display:inline-block;">Name</span><?= Utils::sanitize($__cred['name']) ?></div>
+      <div><span style="color:var(--amber);min-width:110px;display:inline-block;">Email</span><?= Utils::sanitize($__cred['email']) ?></div>
+      <div><span style="color:var(--amber);min-width:110px;display:inline-block;">Password</span><?= Utils::sanitize($__cred['password']) ?></div>
+      <div><span style="color:var(--amber);min-width:110px;display:inline-block;">Grade</span><?= $__cred['grade'] ? 'Grade ' . Utils::sanitize($__cred['grade']) : '—' ?></div>
+      <div><span style="color:var(--amber);min-width:110px;display:inline-block;">Login URL</span><?= BASE_URL ?>public/auth/login.php</div>
+    </div>
+    <div class="alert alert-error" style="margin-top:16px;margin-bottom:0;">
+      <i class="fa-solid fa-circle-exclamation"></i>
+      <div><strong>SMTP Error:</strong> <?= Utils::sanitize($__cred['smtpError']) ?><br>
+      <small>Gmail requires a 16-character <strong>App Password</strong>.<br>
+      Go to: <strong>myaccount.google.com → Security → 2-Step Verification → App passwords</strong></small></div>
+    </div>
+  </div>
+</div>
 <?php endif; ?>
 <?php if ($errors): ?>
   <div class="alert alert-error fade-up">

@@ -49,10 +49,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $fullName, $email, $hash, $salt, $role, $grade, $phoneNo, $currentUID
                 );
 
-                Auth::sendWelcomeEmail($email, $fullName, $role, $plainPwd, $grade);
-                Utils::flash('success',
-                    "Account for \"{$fullName}\" created. Login credentials have been emailed to {$email}."
-                );
+                $mailResult = Auth::sendWelcomeEmail($email, $fullName, $role, $plainPwd, $grade);
+                if ($mailResult['ok']) {
+                    Utils::flash('success',
+                        "Account for \"{$fullName}\" created. Credentials emailed to {$email}."
+                    );
+                } else {
+                    $_SESSION['credential_fallback'] = [
+                        'name'     => $fullName,
+                        'email'    => $email,
+                        'password' => $plainPwd,
+                        'role'     => $role,
+                        'grade'    => $grade,
+                        'smtpError' => $mailResult['error'],
+                    ];
+                    Utils::flash('warning',
+                        "Account created but welcome email could not be sent. "
+                      . "Credentials are shown below — share them with the user manually."
+                    );
+                }
                 Utils::redirect('public/admin/users.php');
             }
         }
@@ -91,8 +106,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'UPDATE users SET password = ?, salt = ?, lastPasswordChangedAt = NOW() WHERE userID = ?',
                 'ssi', $hash, $salt, $targetID
             );
-            Auth::sendWelcomeEmail($target['email'], $target['fullName'], $target['role'], $plainPwd, $target['grade']);
-            Utils::flash('success', "New credentials generated and emailed to {$target['email']}.");
+            $mailResult = Auth::sendWelcomeEmail(
+                $target['email'], $target['fullName'],
+                $target['role'], $plainPwd, $target['grade']
+            );
+            if ($mailResult['ok']) {
+                Utils::flash('success', "New credentials generated and emailed to {$target['email']}.");
+            } else {
+                $_SESSION['credential_fallback'] = [
+                    'name'      => $target['fullName'],
+                    'email'     => $target['email'],
+                    'password'  => $plainPwd,
+                    'role'      => $target['role'],
+                    'grade'     => $target['grade'],
+                    'smtpError' => $mailResult['error'],
+                ];
+                Utils::flash('warning', "Credentials reset but email failed. Credentials shown below.");
+            }
         }
         Utils::redirect('public/admin/users.php');
     }
@@ -166,6 +196,39 @@ require_once ROOT_PATH . 'app/core/header.php';
 
 <?php $f = Utils::flash('success'); if ($f): ?>
   <div class="alert alert-success fade-up"><i class="fa-solid fa-circle-check"></i><?= Utils::sanitize($f) ?></div>
+<?php endif; ?>
+<?php $fw = Utils::flash('warning'); if ($fw): ?>
+  <div class="alert alert-warning fade-up"><i class="fa-solid fa-triangle-exclamation"></i><?= Utils::sanitize($fw) ?></div>
+<?php endif; ?>
+<?php
+$__cred = $_SESSION['credential_fallback'] ?? null;
+unset($_SESSION['credential_fallback']);
+?>
+<?php if ($__cred): ?>
+<div class="card fade-up" style="border:2px solid var(--amber);margin-bottom:20px;">
+  <div class="card-header" style="background:rgba(232,168,49,.08);">
+    <h2 style="color:var(--amber-dk);"><i class="fa-solid fa-envelope-open-text" style="margin-right:8px;"></i>Manual Credential Delivery Required</h2>
+  </div>
+  <div class="card-body">
+    <p style="font-size:13.5px;color:var(--text-muted);margin-bottom:16px;">
+      The account was created successfully, but the welcome email could not be delivered.
+      Please share these credentials with the user directly.
+    </p>
+    <div style="background:var(--navy);border-radius:var(--r-md);padding:20px 24px;font-family:var(--font-mono);font-size:13.5px;color:var(--white);line-height:2;">
+      <div><span style="color:var(--amber);min-width:110px;display:inline-block;">Name</span><?= Utils::sanitize($__cred['name']) ?></div>
+      <div><span style="color:var(--amber);min-width:110px;display:inline-block;">Email</span><?= Utils::sanitize($__cred['email']) ?></div>
+      <div><span style="color:var(--amber);min-width:110px;display:inline-block;">Password</span><?= Utils::sanitize($__cred['password']) ?></div>
+      <div><span style="color:var(--amber);min-width:110px;display:inline-block;">Role</span><?= Utils::sanitize($__cred['role']) ?><?= $__cred['grade'] ? ' · Grade ' . Utils::sanitize($__cred['grade']) : '' ?></div>
+      <div><span style="color:var(--amber);min-width:110px;display:inline-block;">Login URL</span><?= BASE_URL ?>public/auth/login.php</div>
+    </div>
+    <div class="alert alert-error" style="margin-top:16px;margin-bottom:0;">
+      <i class="fa-solid fa-circle-exclamation"></i>
+      <div><strong>SMTP Error:</strong> <?= Utils::sanitize($__cred['smtpError']) ?><br>
+      <small>Gmail requires a 16-character <strong>App Password</strong> (not your Gmail password).<br>
+      Go to: <strong>myaccount.google.com → Security → 2-Step Verification → App passwords</strong></small></div>
+    </div>
+  </div>
+</div>
 <?php endif; ?>
 <?php if ($errors): ?>
   <div class="alert alert-error fade-up">
