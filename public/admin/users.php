@@ -1,5 +1,7 @@
 <?php
 // public/admin/users.php — Admin: User Management
+// Admin can create Admin / Teacher / Student accounts.
+// No manual password — system generates & emails it.
 require_once __DIR__ . '/../../app/config/config.php';
 Auth::requireLogin();
 Auth::requireRole(['Admin']);
@@ -8,39 +10,55 @@ $currentUID = Auth::id();
 $errors     = [];
 $action     = Utils::post('action');
 
-// ── Handle POST actions ─────────────────────────────────────────
+// ── Handle POST ───────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    // Create new user
+    // ── Create user ───────────────────────────────────────────
     if ($action === 'create_user') {
         $fullName = Utils::post('fullName');
         $email    = Utils::post('email');
         $role     = Utils::post('role');
-        $password = Utils::post('password');
+        $phoneNo  = Utils::post('phoneNo') ?: null;
+        $grade    = ($role === 'Student') ? Utils::post('grade') : null;
 
-        if (!$fullName)  $errors[] = 'Full name is required.';
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'A valid email is required.';
+        // Validation
+        if (!$fullName) $errors[] = 'Full name is required.';
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'A valid email address is required.';
         if (!in_array($role, ['Admin','Teacher','Student'], true)) $errors[] = 'Please select a valid role.';
-        if (strlen($password) < 8) $errors[] = 'Password must be at least 8 characters.';
+        if ($role === 'Student') {
+            if (!$grade || !in_array($grade, NoticeHelper::GRADES, true)) {
+                $errors[] = 'Please select a valid grade (1–12) for the student.';
+            }
+        }
 
         if (empty($errors)) {
             $dup = Database::fetchOne('SELECT userID FROM users WHERE email = ?', 's', $email);
             if ($dup) {
                 $errors[] = 'That email address is already registered.';
             } else {
-                $salt = Auth::generateSalt();
-                $hash = Auth::hashPassword($password, $salt);
+                // Generate password, hash it, store it, email it
+                $plainPwd = Auth::generateRandomPassword();
+                $salt     = Auth::generateSalt();
+                $hash     = Auth::hashPassword($plainPwd, $salt);
+
                 Database::query(
-                    'INSERT INTO users (fullName, email, password, salt, role) VALUES (?,?,?,?,?)',
-                    'sssss', $fullName, $email, $hash, $salt, $role
+                    'INSERT INTO users
+                        (fullName, email, password, salt, role, grade, phoneNo, createdBy)
+                     VALUES (?,?,?,?,?,?,?,?)',
+                    'sssssssi',
+                    $fullName, $email, $hash, $salt, $role, $grade, $phoneNo, $currentUID
                 );
-                Utils::flash('success', "User \"{$fullName}\" created successfully.");
+
+                Auth::sendWelcomeEmail($email, $fullName, $role, $plainPwd, $grade);
+                Utils::flash('success',
+                    "Account for \"{$fullName}\" created. Login credentials have been emailed to {$email}."
+                );
                 Utils::redirect('public/admin/users.php');
             }
         }
     }
 
-    // Toggle active/inactive
+    // ── Toggle active ─────────────────────────────────────────
     elseif ($action === 'toggle_active') {
         $targetID = Utils::postInt('targetID');
         if ($targetID && $targetID !== $currentUID) {
@@ -50,28 +68,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         Utils::redirect('public/admin/users.php');
     }
 
-    // Reset failed login attempts
+    // ── Reset login attempts ──────────────────────────────────
     elseif ($action === 'reset_attempts') {
         $targetID = Utils::postInt('targetID');
         if ($targetID) {
             Database::query('UPDATE users SET loginAttempts = 0 WHERE userID = ?', 'i', $targetID);
-            Utils::flash('success', 'Login attempts reset. User can now sign in.');
+            Utils::flash('success', 'Login attempts reset.');
+        }
+        Utils::redirect('public/admin/users.php');
+    }
+
+    // ── Resend welcome email ──────────────────────────────────
+    elseif ($action === 'resend_credentials') {
+        $targetID = Utils::postInt('targetID');
+        $target   = Database::fetchOne('SELECT * FROM users WHERE userID = ?', 'i', $targetID);
+        if ($target) {
+            // Generate a new password and update
+            $plainPwd = Auth::generateRandomPassword();
+            $salt     = Auth::generateSalt();
+            $hash     = Auth::hashPassword($plainPwd, $salt);
+            Database::query(
+                'UPDATE users SET password = ?, salt = ?, lastPasswordChangedAt = NOW() WHERE userID = ?',
+                'ssi', $hash, $salt, $targetID
+            );
+            Auth::sendWelcomeEmail($target['email'], $target['fullName'], $target['role'], $plainPwd, $target['grade']);
+            Utils::flash('success', "New credentials generated and emailed to {$target['email']}.");
         }
         Utils::redirect('public/admin/users.php');
     }
 }
 
-// ── Fetch users ─────────────────────────────────────────────────
-$search  = Utils::get('search');
-$roleF   = Utils::get('role');
+// ── Fetch users ───────────────────────────────────────────────
+$search = Utils::get('search');
+$roleF  = Utils::get('role');
+$gradeF = Utils::get('grade');
 
 $where  = [];
 $types  = '';
 $params = [];
 
 if ($search) {
-    $where[]  = '(fullName LIKE ? OR email LIKE ?)';
-    $types   .= 'ss';
+    $where[]  = '(fullName LIKE ? OR email LIKE ? OR phoneNo LIKE ?)';
+    $types   .= 'sss';
+    $params[] = "%{$search}%";
     $params[] = "%{$search}%";
     $params[] = "%{$search}%";
 }
@@ -80,14 +119,23 @@ if ($roleF && in_array($roleF, ['Admin','Teacher','Student'], true)) {
     $types   .= 's';
     $params[] = $roleF;
 }
+if ($gradeF && in_array($gradeF, NoticeHelper::GRADES, true)) {
+    $where[]  = 'grade = ?';
+    $types   .= 's';
+    $params[] = $gradeF;
+}
 
 $whereSQL  = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 $usersList = Database::fetchAll(
-    "SELECT * FROM users {$whereSQL} ORDER BY role, fullName",
+    "SELECT u.*, c.fullName AS createdByName
+     FROM users u
+     LEFT JOIN users c ON u.createdBy = c.userID
+     {$whereSQL}
+     ORDER BY u.role, u.fullName",
     $types, ...$params
 );
 
-// Count per role
+// Role counts
 $roleCounts = [];
 foreach (Database::fetchAll('SELECT role, COUNT(*) AS c FROM users GROUP BY role') as $r) {
     $roleCounts[$r['role']] = $r['c'];
@@ -107,9 +155,7 @@ require_once ROOT_PATH . 'app/core/header.php';
     <div class="breadcrumb">
       <a href="<?= BASE_URL ?>public/dashboard.php">Dashboard</a>
       <i class="fa-solid fa-chevron-right" style="font-size:9px"></i>
-      Admin
-      <i class="fa-solid fa-chevron-right" style="font-size:9px"></i>
-      Users
+      Admin · Users
     </div>
   </div>
   <button class="btn btn-amber"
@@ -128,9 +174,9 @@ require_once ROOT_PATH . 'app/core/header.php';
   </div>
 <?php endif; ?>
 
-<!-- Role stats -->
+<!-- Stats -->
 <div class="stats-row fade-up">
-  <?php foreach (['Admin', 'Teacher', 'Student'] as $r): ?>
+  <?php foreach (['Admin','Teacher','Student'] as $r): ?>
   <div class="stat-card">
     <div class="stat-icon" style="background:<?= $roleColors[$r] ?>22;">
       <i class="fa-solid <?= $roleIcons[$r] ?>" style="color:<?= $roleColors[$r] ?>"></i>
@@ -152,25 +198,33 @@ require_once ROOT_PATH . 'app/core/header.php';
   </div>
 </div>
 
-<!-- Filter -->
+<!-- Filters -->
 <form method="GET" class="filter-bar fade-up">
   <div class="filter-search-wrap" style="flex:1;">
     <i class="fa-solid fa-magnifying-glass fs-icon"></i>
     <input type="text" name="search" class="filter-search form-control"
-           placeholder="Search by name or email…"
+           placeholder="Search name, email or phone…"
            value="<?= Utils::sanitize($search) ?>" style="padding-left:36px;">
   </div>
   <select name="role" class="filter-select">
     <option value="">All Roles</option>
-    <option value="Admin"   <?= $roleF==='Admin'   ?'selected':''?>>Admin</option>
-    <option value="Teacher" <?= $roleF==='Teacher' ?'selected':''?>>Teacher</option>
-    <option value="Student" <?= $roleF==='Student' ?'selected':''?>>Student</option>
+    <?php foreach (['Admin','Teacher','Student'] as $r): ?>
+      <option value="<?= $r ?>" <?= $roleF===$r?'selected':''?>><?= $r ?></option>
+    <?php endforeach; ?>
+  </select>
+  <select name="grade" class="filter-select">
+    <option value="">All Grades</option>
+    <?php foreach (NoticeHelper::GRADES as $g): ?>
+      <option value="<?= $g ?>" <?= $gradeF===$g?'selected':''?>>Grade <?= $g ?></option>
+    <?php endforeach; ?>
   </select>
   <button type="submit" class="btn btn-primary btn-sm">Search</button>
-  <?php if ($search || $roleF): ?><a href="users.php" class="btn btn-outline btn-sm">Clear</a><?php endif; ?>
+  <?php if ($search || $roleF || $gradeF): ?>
+    <a href="users.php" class="btn btn-outline btn-sm">Clear</a>
+  <?php endif; ?>
 </form>
 
-<!-- Table -->
+<!-- Users Table -->
 <?php if (empty($usersList)): ?>
   <div class="empty-state fade-up">
     <i class="fa-solid fa-users-slash"></i>
@@ -182,15 +236,17 @@ require_once ROOT_PATH . 'app/core/header.php';
   <table class="data-table">
     <thead>
       <tr>
-        <th style="width:48px;">#</th>
+        <th>#</th>
         <th>Name</th>
         <th>Email</th>
+        <th>Phone</th>
         <th>Role</th>
+        <th>Grade</th>
         <th>Status</th>
-        <th>Login Attempts</th>
+        <th>Attempts</th>
         <th>Last Login</th>
-        <th>Joined</th>
-        <th style="width:130px;">Actions</th>
+        <th>Created By</th>
+        <th>Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -200,29 +256,43 @@ require_once ROOT_PATH . 'app/core/header.php';
 
         <td>
           <div style="display:flex;align-items:center;gap:10px;">
-            <div style="width:32px;height:32px;border-radius:50%;background:<?= $roleColors[$u['role']] ?? 'var(--navy)' ?>;
+            <div style="width:32px;height:32px;border-radius:50%;
+                        background:<?= $roleColors[$u['role']] ?? 'var(--navy)' ?>;
                         color:white;display:flex;align-items:center;justify-content:center;
-                        font-size:13px;font-weight:700;flex-shrink:0;">
+                        font-size:12px;font-weight:700;flex-shrink:0;">
               <?= Utils::initials($u['fullName']) ?>
             </div>
             <div>
-              <div style="font-weight:500;font-size:13.5px;"><?= Utils::sanitize($u['fullName']) ?></div>
+              <div style="font-weight:500;font-size:13px;"><?= Utils::sanitize($u['fullName']) ?></div>
               <?php if ($u['userID'] == $currentUID): ?>
-                <div style="font-size:11px;color:var(--amber-dk);font-weight:600;">You</div>
+                <div style="font-size:10px;color:var(--amber-dk);font-weight:700;letter-spacing:.4px;">YOU</div>
               <?php endif; ?>
             </div>
           </div>
         </td>
 
-        <td style="font-size:13px;color:var(--text-muted);"><?= Utils::sanitize($u['email']) ?></td>
+        <td style="font-size:12.5px;color:var(--text-muted);"><?= Utils::sanitize($u['email']) ?></td>
+
+        <td style="font-size:12.5px;color:var(--text-muted);">
+          <?= $u['phoneNo'] ? Utils::sanitize($u['phoneNo']) : '<span style="color:var(--text-light)">—</span>' ?>
+        </td>
 
         <td>
           <span class="tag" style="background:<?= $roleColors[$u['role']] ?? '#aaa' ?>22;
-                                   color:<?= $roleColors[$u['role']] ?? 'var(--text-main)' ?>;
-                                   font-size:11px;">
+                                   color:<?= $roleColors[$u['role']] ?? 'var(--text-main)' ?>;font-size:11px;">
             <i class="fa-solid <?= $roleIcons[$u['role']] ?? 'fa-user' ?>"></i>
             <?= $u['role'] ?>
           </span>
+        </td>
+
+        <td>
+          <?php if ($u['grade']): ?>
+            <span class="tag" style="background:rgba(79,201,247,.12);color:#0a7a96;font-size:11px;">
+              <i class="fa-solid fa-layer-group"></i> Grade <?= Utils::sanitize($u['grade']) ?>
+            </span>
+          <?php else: ?>
+            <span style="color:var(--text-light);font-size:12px;">—</span>
+          <?php endif; ?>
         </td>
 
         <td>
@@ -234,27 +304,28 @@ require_once ROOT_PATH . 'app/core/header.php';
         </td>
 
         <td>
-          <span style="font-family:var(--font-mono);font-size:13px;
+          <span style="font-family:var(--font-mono);font-size:12px;
                        <?= $u['loginAttempts'] >= MAX_LOGIN_ATTEMPTS ? 'color:var(--red);font-weight:700;' : 'color:var(--text-muted)' ?>">
-            <?= $u['loginAttempts'] ?> / <?= MAX_LOGIN_ATTEMPTS ?>
+            <?= $u['loginAttempts'] ?>/<?= MAX_LOGIN_ATTEMPTS ?>
           </span>
           <?php if ($u['loginAttempts'] >= MAX_LOGIN_ATTEMPTS): ?>
-            <span class="tag tag-urgent" style="font-size:10px;margin-left:4px;">Locked</span>
+            <span class="tag tag-urgent" style="font-size:9px;margin-left:4px;">Locked</span>
           <?php endif; ?>
         </td>
 
-        <td style="font-size:12.5px;color:var(--text-muted);">
+        <td style="font-size:12px;color:var(--text-muted);">
           <?= $u['lastLoginAt'] ? Utils::timeAgo($u['lastLoginAt']) : '<span style="color:var(--text-light)">Never</span>' ?>
         </td>
 
-        <td style="font-size:12.5px;color:var(--text-muted);white-space:nowrap;">
-          <?= date('d M Y', strtotime($u['createdAt'])) ?>
+        <td style="font-size:12px;color:var(--text-muted);">
+          <?= $u['createdByName'] ? Utils::sanitize($u['createdByName']) : '<span style="color:var(--text-light)">System</span>' ?>
         </td>
 
         <td>
-          <div style="display:flex;gap:5px;">
+          <div style="display:flex;gap:4px;flex-wrap:wrap;">
             <?php if ($u['userID'] !== $currentUID): ?>
-              <!-- Toggle active -->
+
+              <!-- Toggle active/inactive -->
               <form method="POST" style="display:inline;">
                 <input type="hidden" name="action"   value="toggle_active">
                 <input type="hidden" name="targetID" value="<?= $u['userID'] ?>">
@@ -263,21 +334,34 @@ require_once ROOT_PATH . 'app/core/header.php';
                   <i class="fa-solid <?= $u['active'] ? 'fa-ban' : 'fa-circle-check' ?>"></i>
                 </button>
               </form>
-              <!-- Reset login attempts -->
+
+              <!-- Reset login lock -->
               <?php if ($u['loginAttempts'] > 0): ?>
               <form method="POST" style="display:inline;">
                 <input type="hidden" name="action"   value="reset_attempts">
                 <input type="hidden" name="targetID" value="<?= $u['userID'] ?>">
                 <button type="submit" class="btn btn-outline btn-sm btn-icon"
-                        data-tip="Reset Login Lock"
-                        data-confirm="Reset login attempts for <?= Utils::sanitize($u['fullName']) ?>?">
-                  <i class="fa-solid fa-rotate-right"></i>
+                        data-tip="Unlock Account"
+                        data-confirm="Reset login lock for <?= Utils::sanitize($u['fullName']) ?>?">
+                  <i class="fa-solid fa-lock-open"></i>
                 </button>
               </form>
               <?php endif; ?>
+
+              <!-- Resend credentials -->
+              <form method="POST" style="display:inline;">
+                <input type="hidden" name="action"   value="resend_credentials">
+                <input type="hidden" name="targetID" value="<?= $u['userID'] ?>">
+                <button type="submit" class="btn btn-outline btn-sm btn-icon"
+                        data-tip="Resend Login Credentials"
+                        data-confirm="Generate a new password and email it to <?= Utils::sanitize($u['fullName']) ?>?">
+                  <i class="fa-solid fa-envelope-circle-check"></i>
+                </button>
+              </form>
+
             <?php else: ?>
               <a href="<?= BASE_URL ?>public/auth/profile.php"
-                 class="btn btn-outline btn-sm btn-icon" data-tip="Edit My Profile">
+                 class="btn btn-outline btn-sm btn-icon" data-tip="My Profile">
                 <i class="fa-solid fa-pen"></i>
               </a>
             <?php endif; ?>
@@ -290,27 +374,44 @@ require_once ROOT_PATH . 'app/core/header.php';
 </div>
 <?php endif; ?>
 
-<!-- ── Create User Modal ─────────────────────────────────────── -->
+<!-- ═══════════════════════════════════════
+     CREATE USER MODAL
+     ═══════════════════════════════════════ -->
 <div class="modal-overlay" id="createModal"
      onclick="if(event.target===this)this.classList.remove('open')">
-  <div class="modal">
+  <div class="modal" style="max-width:560px;">
     <div class="modal-header">
       <h3>
         <i class="fa-solid fa-user-plus" style="color:var(--amber);margin-right:8px;"></i>
         Add New User
       </h3>
+      <p style="font-size:13px;color:var(--text-muted);margin-top:4px;">
+        A secure password will be auto-generated and emailed to the new user.
+      </p>
     </div>
     <form method="POST">
       <input type="hidden" name="action" value="create_user">
       <div class="modal-body">
-        <div class="form-group">
-          <label class="form-label">Full Name *</label>
-          <div class="input-group">
-            <i class="fa-solid fa-user input-icon"></i>
-            <input type="text" name="fullName" class="form-control"
-                   placeholder="e.g. Priya Sharma" required>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Full Name *</label>
+            <div class="input-group">
+              <i class="fa-solid fa-user input-icon"></i>
+              <input type="text" name="fullName" class="form-control"
+                     placeholder="e.g. Priya Sharma" required>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Phone Number</label>
+            <div class="input-group">
+              <i class="fa-solid fa-phone input-icon"></i>
+              <input type="tel" name="phoneNo" class="form-control"
+                     placeholder="e.g. 9876543210" maxlength="15">
+            </div>
           </div>
         </div>
+
         <div class="form-group">
           <label class="form-label">Email Address *</label>
           <div class="input-group">
@@ -319,22 +420,42 @@ require_once ROOT_PATH . 'app/core/header.php';
                    placeholder="user@school.edu" required>
           </div>
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Role *</label>
-            <select name="role" class="form-control" required>
-              <option value="">Select role</option>
-              <option value="Student">Student</option>
-              <option value="Teacher">Teacher</option>
-              <option value="Admin">Admin</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Password *</label>
-            <input type="password" name="password" class="form-control"
-                   placeholder="Min 8 characters" required minlength="8">
+
+        <div class="form-group">
+          <label class="form-label">Role *</label>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:4px;">
+            <?php foreach (['Student','Teacher','Admin'] as $r):
+              $ic = $roleIcons[$r]; $cl = $roleColors[$r];
+            ?>
+            <label style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 8px;
+                          border:2px solid var(--border);border-radius:var(--r-md);cursor:pointer;
+                          transition:all .2s;" class="role-card" data-role="<?= $r ?>">
+              <input type="radio" name="role" value="<?= $r ?>" required
+                     style="position:absolute;opacity:0;" onchange="updateRoleUI()">
+              <i class="fa-solid <?= $ic ?>" style="font-size:20px;color:<?= $cl ?>"></i>
+              <span style="font-size:12px;font-weight:600;color:var(--navy);"><?= $r ?></span>
+            </label>
+            <?php endforeach; ?>
           </div>
         </div>
+
+        <!-- Grade — only for Student -->
+        <div class="form-group" id="gradeGroup" style="display:none;">
+          <label class="form-label">Student Grade *</label>
+          <select name="grade" id="gradeSelect" class="form-control">
+            <option value="">Select grade</option>
+            <?php foreach (NoticeHelper::GRADES as $g): ?>
+              <option value="<?= $g ?>">Grade <?= $g ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+
+        <!-- Email preview notice -->
+        <div class="alert alert-info" style="margin-top:4px;margin-bottom:0;">
+          <i class="fa-solid fa-circle-info"></i>
+          <span>A randomly generated password will be emailed to the new user immediately upon account creation.</span>
+        </div>
+
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline"
@@ -342,7 +463,7 @@ require_once ROOT_PATH . 'app/core/header.php';
           Cancel
         </button>
         <button type="submit" class="btn btn-amber">
-          <i class="fa-solid fa-user-plus"></i> Create User
+          <i class="fa-solid fa-user-plus"></i> Create &amp; Send Credentials
         </button>
       </div>
     </form>
@@ -352,9 +473,31 @@ require_once ROOT_PATH . 'app/core/header.php';
 <?php if ($errors && $action === 'create_user'): ?>
 <script>
 document.addEventListener('DOMContentLoaded', () =>
-  document.getElementById('createModal').classList.add('open')
+    document.getElementById('createModal').classList.add('open')
 );
 </script>
 <?php endif; ?>
+
+<style>
+.role-card:has(input:checked) {
+    border-color: var(--navy) !important;
+    background: rgba(13,27,42,.05);
+    box-shadow: 0 0 0 3px rgba(13,27,42,.08);
+}
+</style>
+<script>
+function updateRoleUI() {
+    const selected = document.querySelector('input[name="role"]:checked')?.value;
+    document.getElementById('gradeGroup').style.display  = selected === 'Student' ? '' : 'none';
+    document.getElementById('gradeSelect').required      = selected === 'Student';
+}
+// Highlight card on click
+document.querySelectorAll('.role-card').forEach(card => {
+    card.addEventListener('click', () => {
+        card.querySelector('input[type="radio"]').checked = true;
+        updateRoleUI();
+    });
+});
+</script>
 
 <?php require_once ROOT_PATH . 'app/core/footer.php'; ?>

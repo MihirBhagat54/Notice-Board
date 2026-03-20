@@ -808,6 +808,7 @@ button, input, select, textarea {
 .tag-scope-general    { background: rgba(46,158,104,.1);  color: #1c7a4e; }
 .tag-scope-role       { background: rgba(119,85,204,.1);  color: #5a3fa8; }
 .tag-scope-individual { background: rgba(232,168,49,.1);  color: #8a5f0a; }
+.tag-scope-grade      { background: rgba(15,163,177,.1);   color: #096a77; }
 
 .tag-urgent { background: rgba(217,79,61,.1); color: #a8281a; }
 .tag-expired { background: var(--ivory-2); color: var(--text-muted); }

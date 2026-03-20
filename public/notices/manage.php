@@ -216,7 +216,7 @@ require_once ROOT_PATH . 'app/core/header.php';
           </td>
 
           <td>
-            <span class="tag tag-scope-<?= strtolower(explode(' ', $n['scopeName'])[0]) ?>"
+            <span class="tag tag-scope-<?= preg_match('/^Student Grade/', $n['scopeName']) ? 'grade' : strtolower(explode(' ', $n['scopeName'])[0]) ?>"
                   style="font-size:11px;">
               <?= Utils::sanitize($n['scopeName']) ?>
             </span>

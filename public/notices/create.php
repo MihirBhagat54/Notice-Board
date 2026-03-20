@@ -22,15 +22,18 @@ $isEdit  = (bool)$notice;
 $errors  = [];
 $grouped = NoticeHelper::getCategoriesGrouped();
 $scopes  = NoticeHelper::getScopes();
-$users   = Database::fetchAll('SELECT userID, fullName, role FROM users WHERE active=1 ORDER BY role, fullName');
+$users   = Database::fetchAll(
+    'SELECT userID, fullName, role, grade FROM users WHERE active=1 ORDER BY role, fullName'
+);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $title       = Utils::post('title');
     $description = Utils::post('description');
     $categoryID  = Utils::postInt('categoryID');
     $scopeID     = Utils::postInt('scopeID');
-    $targetRole  = Utils::post('targetRole') ?: null;
+    $targetRole  = Utils::post('targetRole')  ?: null;
     $targetUID   = Utils::postInt('targetUserID') ?: null;
+    $targetGrade = Utils::post('targetGrade') ?: null;
     $publishDate = Utils::post('publishDate');
     $expiryDate  = Utils::post('expiryDate') ?: null;
 
@@ -42,18 +45,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $scopeRow = Database::fetchOne('SELECT scopeName FROM notice_scopes WHERE scopeID = ?', 'i', $scopeID);
     if ($scopeRow) {
-        if ($scopeRow['scopeName'] === 'Role Based' && !$targetRole) $errors[] = 'Please select a target role for Role Based scope.';
-        if ($scopeRow['scopeName'] === 'Individual'  && !$targetUID)  $errors[] = 'Please select a target user for Individual scope.';
+        $sn = $scopeRow['scopeName'];
+        if ($sn === 'Role Based' && !$targetRole)  $errors[] = 'Please select a target role.';
+        if ($sn === 'Individual'  && !$targetUID)   $errors[] = 'Please select a target user.';
+        if (NoticeHelper::isGradeScope($sn) && !$targetGrade) {
+            $errors[] = 'Please select a target grade.';
+        }
+        // If it's not a grade scope, clear targetGrade
+        if (!NoticeHelper::isGradeScope($sn)) $targetGrade = null;
+        // Derive targetGrade from scope name automatically
+        if (NoticeHelper::isGradeScope($sn) && $targetGrade) {
+            // targetGrade already set via dropdown
+        }
     }
 
-    // Attachment handling
+    // Attachment
     $attachData = $notice['attachment']     ?? null;
     $attachName = $notice['attachmentName'] ?? null;
     $attachType = $notice['attachmentType'] ?? null;
 
     if (!empty($_FILES['attachment']['size'])) {
         $file    = $_FILES['attachment'];
-        $allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/gif'];
+        $allowed = ['application/pdf','image/jpeg','image/png','image/gif'];
         if (!in_array($file['type'], $allowed)) {
             $errors[] = 'Only PDF, JPG, PNG, or GIF files are allowed.';
         } elseif ($file['size'] > 5 * 1024 * 1024) {
@@ -68,47 +81,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($errors)) {
         $pubDate = date('Y-m-d H:i:s', strtotime($publishDate));
         $expDate = $expiryDate ? date('Y-m-d H:i:s', strtotime($expiryDate)) : null;
-
-        $db = Database::raw();
+        $db      = Database::raw();
 
         if ($isEdit) {
             $stmt = $db->prepare(
                 'UPDATE notices
                  SET title=?, description=?, categoryID=?, scopeID=?,
-                     targetRole=?, targetUserID=?, publishDate=?, expiryDate=?,
+                     targetRole=?, targetUserID=?, targetGrade=?,
+                     publishDate=?, expiryDate=?,
                      attachment=?, attachmentName=?, attachmentType=?,
                      modifiedBy=?, modifiedAt=NOW()
                  WHERE noticeID=?'
             );
             $null = null;
             $stmt->bind_param(
-                'ssiissssbssii',
+                'ssiisssssbssii',
                 $title, $description, $categoryID, $scopeID,
-                $targetRole, $targetUID, $pubDate, $expDate,
+                $targetRole, $targetUID, $targetGrade,
+                $pubDate, $expDate,
                 $null, $attachName, $attachType,
                 $uid, $editID
             );
-            $stmt->send_long_data(8, $attachData ?? '');
+            $stmt->send_long_data(9, $attachData ?? '');
             $stmt->execute();
             Utils::flash('success', 'Notice updated successfully.');
         } else {
             $stmt = $db->prepare(
                 'INSERT INTO notices
                     (title, description, categoryID, scopeID,
-                     targetRole, targetUserID, publishDate, expiryDate,
+                     targetRole, targetUserID, targetGrade,
+                     publishDate, expiryDate,
                      attachment, attachmentName, attachmentType,
                      createdBy, modifiedBy)
-                 VALUES (?,?,?,?, ?,?,?,?, ?,?,?, ?,?)'
+                 VALUES (?,?,?,?, ?,?,?, ?,?, ?,?,?, ?,?)'
             );
             $null = null;
             $stmt->bind_param(
-                'ssiissssbssii',
+                'ssiisssssbssii',
                 $title, $description, $categoryID, $scopeID,
-                $targetRole, $targetUID, $pubDate, $expDate,
+                $targetRole, $targetUID, $targetGrade,
+                $pubDate, $expDate,
                 $null, $attachName, $attachType,
                 $uid, $uid
             );
-            $stmt->send_long_data(8, $attachData ?? '');
+            $stmt->send_long_data(9, $attachData ?? '');
             $stmt->execute();
             Utils::flash('success', 'Notice published successfully.');
         }
@@ -147,7 +163,7 @@ require_once ROOT_PATH . 'app/core/header.php';
 <form method="POST" enctype="multipart/form-data">
   <div style="display:grid; grid-template-columns:1fr 320px; gap:24px; align-items:start;">
 
-    <!-- ── Left: Notice Content ── -->
+    <!-- ── Left: Content + Attachment ── -->
     <div style="display:flex; flex-direction:column; gap:20px;">
 
       <div class="card fade-up">
@@ -171,7 +187,6 @@ require_once ROOT_PATH . 'app/core/header.php';
         </div>
       </div>
 
-      <!-- Attachment -->
       <div class="card fade-up">
         <div class="card-header">
           <h2><i class="fa-solid fa-paperclip" style="color:var(--amber);margin-right:8px;"></i>Attachment</h2>
@@ -236,16 +251,27 @@ require_once ROOT_PATH . 'app/core/header.php';
           <label class="form-label">Scope *</label>
           <select name="scopeID" id="scopeSelect" class="form-control" required>
             <option value="">Select a scope</option>
-            <?php foreach ($scopes as $s): ?>
+            <?php
+            $prevGroup = '';
+            foreach ($scopes as $s):
+                // Group Grade scopes under a visual separator label
+                $isGrade    = NoticeHelper::isGradeScope($s['scopeName']);
+                $thisGroup  = $isGrade ? 'grade' : 'standard';
+                if ($thisGroup !== $prevGroup && $isGrade):
+                    $prevGroup = $thisGroup;
+            ?>
+              <option disabled style="color:var(--text-light);font-size:11px;background:var(--ivory);">── Student Grade Scopes ──</option>
+            <?php endif; ?>
               <option value="<?= $s['scopeID'] ?>"
                       data-name="<?= Utils::sanitize($s['scopeName']) ?>"
                       data-desc="<?= Utils::sanitize($s['description']) ?>"
+                      data-grade="<?= $isGrade ? preg_replace('/\D/', '', $s['scopeName']) : '' ?>"
                 <?= (($notice['scopeID'] ?? $_POST['scopeID'] ?? '') == $s['scopeID']) ? 'selected' : '' ?>>
                 <?= Utils::sanitize($s['scopeName']) ?>
               </option>
             <?php endforeach; ?>
           </select>
-          <div id="scopeDesc" style="font-size:12px;color:var(--text-muted);margin-top:5px;"></div>
+          <div id="scopeDesc" style="font-size:12px;color:var(--text-muted);margin-top:5px;min-height:16px;"></div>
         </div>
 
         <!-- Role Based target -->
@@ -254,8 +280,7 @@ require_once ROOT_PATH . 'app/core/header.php';
           <select name="targetRole" class="form-control">
             <option value="">Select role</option>
             <?php foreach (['Admin','Teacher','Student'] as $r): ?>
-              <option value="<?= $r ?>"
-                <?= (($notice['targetRole'] ?? '') === $r) ? 'selected' : '' ?>>
+              <option value="<?= $r ?>" <?= (($notice['targetRole'] ?? '') === $r) ? 'selected' : '' ?>>
                 <?= $r ?>
               </option>
             <?php endforeach; ?>
@@ -270,10 +295,25 @@ require_once ROOT_PATH . 'app/core/header.php';
             <?php foreach ($users as $u): ?>
               <option value="<?= $u['userID'] ?>"
                 <?= (($notice['targetUserID'] ?? '') == $u['userID']) ? 'selected' : '' ?>>
-                <?= Utils::sanitize($u['fullName']) ?> (<?= $u['role'] ?>)
+                <?= Utils::sanitize($u['fullName']) ?>
+                (<?= $u['role'] ?><?= $u['grade'] ? ' · Grade '.$u['grade'] : '' ?>)
               </option>
             <?php endforeach; ?>
           </select>
+        </div>
+
+        <!-- Student Grade target — auto-set from scope, shown as read-only info -->
+        <div class="form-group" id="gradeTargetGroup" style="display:none;">
+          <label class="form-label">Target Grade</label>
+          <input type="hidden" name="targetGrade" id="targetGradeInput"
+                 value="<?= Utils::sanitize($notice['targetGrade'] ?? '') ?>">
+          <div id="gradeDisplay" style="padding:10px 14px;background:var(--ivory);border:1.5px solid var(--border);
+                                        border-radius:var(--r-sm);font-size:13px;color:var(--navy);font-weight:500;">
+            —
+          </div>
+          <div style="font-size:11.5px;color:var(--text-muted);margin-top:5px;">
+            Grade is automatically determined by the selected scope.
+          </div>
         </div>
 
         <hr style="border:none;border-top:1px solid var(--border-lt);margin:16px 0;">
@@ -286,8 +326,7 @@ require_once ROOT_PATH . 'app/core/header.php';
         </div>
         <div class="form-group">
           <label class="form-label">
-            Expiry Date
-            <span style="font-weight:400;color:var(--text-light);"> (optional)</span>
+            Expiry Date <span style="font-weight:400;color:var(--text-light);">(optional)</span>
           </label>
           <input type="datetime-local" name="expiryDate" class="form-control"
                  value="<?= ($notice && $notice['expiryDate']) ? date('Y-m-d\TH:i', strtotime($notice['expiryDate'])) : '' ?>">
@@ -307,35 +346,55 @@ require_once ROOT_PATH . 'app/core/header.php';
 </form>
 
 <script>
-// ── Scope conditional fields ───────────────────────────────────
-const scopeSelect = document.getElementById('scopeSelect');
+const scopeSelect        = document.getElementById('scopeSelect');
+const roleTargetGroup    = document.getElementById('roleTargetGroup');
+const userTargetGroup    = document.getElementById('userTargetGroup');
+const gradeTargetGroup   = document.getElementById('gradeTargetGroup');
+const scopeDesc          = document.getElementById('scopeDesc');
+const gradeDisplay       = document.getElementById('gradeDisplay');
+const targetGradeInput   = document.getElementById('targetGradeInput');
+
 function updateScopeUI() {
-  const opt  = scopeSelect.options[scopeSelect.selectedIndex];
-  const name = opt?.dataset.name || '';
-  const desc = opt?.dataset.desc || '';
-  document.getElementById('scopeDesc').textContent      = desc;
-  document.getElementById('roleTargetGroup').style.display = name === 'Role Based' ? '' : 'none';
-  document.getElementById('userTargetGroup').style.display = name === 'Individual'  ? '' : 'none';
+    const opt   = scopeSelect.options[scopeSelect.selectedIndex];
+    const name  = opt?.dataset.name  || '';
+    const desc  = opt?.dataset.desc  || '';
+    const grade = opt?.dataset.grade || '';   // e.g. "10" for "Student Grade 10"
+
+    scopeDesc.textContent = desc;
+
+    roleTargetGroup.style.display  = (name === 'Role Based') ? '' : 'none';
+    userTargetGroup.style.display  = (name === 'Individual')  ? '' : 'none';
+    gradeTargetGroup.style.display = grade ? '' : 'none';
+
+    if (grade) {
+        targetGradeInput.value  = grade;
+        gradeDisplay.textContent = 'Grade ' + grade;
+    } else {
+        targetGradeInput.value  = '';
+        gradeDisplay.textContent = '—';
+    }
 }
+
 scopeSelect?.addEventListener('change', updateScopeUI);
 updateScopeUI();
 
-// ── File drop zone ─────────────────────────────────────────────
+// ── File drop zone ────────────────────────────────────────────
 const dropZone    = document.getElementById('dropZone');
 const fileInput   = document.getElementById('attachFile');
 const fileDisplay = document.getElementById('fileNameDisplay');
 
 fileInput?.addEventListener('change', () => {
-  if (fileInput.files[0]) fileDisplay.textContent = '📎 ' + fileInput.files[0].name;
+    if (fileInput.files[0]) fileDisplay.textContent = '📎 ' + fileInput.files[0].name;
 });
 dropZone?.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
 dropZone?.addEventListener('dragleave', ()  => dropZone.classList.remove('drag-over'));
 dropZone?.addEventListener('drop', e => {
-  e.preventDefault(); dropZone.classList.remove('drag-over');
-  const dt = new DataTransfer();
-  dt.items.add(e.dataTransfer.files[0]);
-  fileInput.files = dt.files;
-  fileDisplay.textContent = '📎 ' + e.dataTransfer.files[0].name;
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const dt = new DataTransfer();
+    dt.items.add(e.dataTransfer.files[0]);
+    fileInput.files = dt.files;
+    fileDisplay.textContent = '📎 ' + e.dataTransfer.files[0].name;
 });
 </script>
 

@@ -54,10 +54,10 @@ define('APP_PATH',  ROOT_PATH . 'app'   . DIRECTORY_SEPARATOR);
 // ── Mail (update for production SMTP) ────────────────────────
 define('MAIL_HOST', 'smtp.gmail.com');
 define('MAIL_PORT', 587);
-define('MAIL_USER', 'noreply@school.edu');
-define('MAIL_PASS', 'your_app_password');
-define('MAIL_FROM', 'noreply@school.edu');
-define('MAIL_NAME', 'EduBoard Notices');
+define('MAIL_USER', 'boardedu508@gmail.com');
+define('MAIL_PASS', 'Aditya@123');
+define('MAIL_FROM', 'boardedu508@gmail.com');
+define('MAIL_NAME', 'Edu Board');
 
 // ── Security ──────────────────────────────────────────────────
 define('OTP_EXPIRY_MINUTES', 10);

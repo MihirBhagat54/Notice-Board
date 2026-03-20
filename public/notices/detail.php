@@ -30,10 +30,13 @@ if (!$notice) Utils::redirect('public/notices/index.php');
 
 // Visibility gate for students
 if ($role === 'Student') {
-    $sn = $notice['scopeName'];
+    $sn          = $notice['scopeName'];
+    $currentUser = Auth::currentUser();
+    $myGrade     = $currentUser['grade'] ?? null;
     $ok = ($sn === 'General')
        || ($sn === 'Role Based' && $notice['targetRole']   === 'Student')
-       || ($sn === 'Individual'  && $notice['targetUserID'] == $uid);
+       || ($sn === 'Individual'  && $notice['targetUserID'] == $uid)
+       || (NoticeHelper::isGradeScope($sn) && $myGrade !== null && $notice['targetGrade'] === $myGrade);
     if (!$ok) Utils::redirect('public/dashboard.php');
 }
 
@@ -97,6 +100,10 @@ require_once ROOT_PATH . 'app/core/header.php';
         <?php elseif ($notice['scopeName'] === 'Individual' && $notice['targetUserName']): ?>
           <span class="tag" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);">
             To: <?= Utils::sanitize($notice['targetUserName']) ?>
+          </span>
+        <?php elseif (NoticeHelper::isGradeScope($notice['scopeName']) && $notice['targetGrade']): ?>
+          <span class="tag" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);">
+            <i class="fa-solid fa-layer-group"></i> Grade <?= Utils::sanitize($notice['targetGrade']) ?>
           </span>
         <?php endif; ?>
         <?php if ($isUrgent): ?>

@@ -5,17 +5,40 @@
 
 class NoticeHelper
 {
+    // Grades 1–12 constant
+    public const GRADES = ['1','2','3','4','5','6','7','8','9','10','11','12'];
+
     // ── Fetch notices visible to a given user ─────────────────
-    public static function getVisibleNotices(int $userID, string $role, array $filters = []): array
-    {
+    public static function getVisibleNotices(
+        int    $userID,
+        string $role,
+        ?string $grade,          // student's own grade (null for Admin/Teacher)
+        array  $filters = []
+    ): array {
         $where  = ["n.deletedAt IS NULL", "n.active = 1"];
         $types  = '';
         $params = [];
 
-        // Scope filter: show General + matching Role-Based + Individual
-        $where[]  = "(s.scopeName = 'General'
-                      OR (s.scopeName = 'Role Based' AND n.targetRole = ?)
-                      OR (s.scopeName = 'Individual'  AND n.targetUserID = ?))";
+        // Build scope gate
+        // A notice is visible when ANY of:
+        //   1. scope = General
+        //   2. scope = Role Based  AND targetRole  = this user's role
+        //   3. scope = Individual  AND targetUserID = this user's ID
+        //   4. scope = Student Grade X AND this user is Student with grade X
+        $gradeClause = '';
+        if ($role === 'Student' && $grade !== null) {
+            $gradeClause = "OR (s.scopeName = CONCAT('Student Grade ', ?) AND n.targetGrade = ?)";
+            $types      .= 'ss';
+            $params[]    = $grade;
+            $params[]    = $grade;
+        }
+
+        $where[]  = "(
+            s.scopeName = 'General'
+            OR (s.scopeName = 'Role Based' AND n.targetRole = ?)
+            OR (s.scopeName = 'Individual' AND n.targetUserID = ?)
+            {$gradeClause}
+        )";
         $types   .= 'si';
         $params[] = $role;
         $params[] = $userID;
@@ -25,7 +48,7 @@ class NoticeHelper
         return self::runNoticeQuery(implode(' AND ', $where), $types, $params);
     }
 
-    // ── Fetch ALL notices (admin view, no scope gate) ─────────
+    // ── Fetch ALL notices (Admin view, no scope gate) ──────────
     public static function getAllNotices(array $filters = []): array
     {
         $where  = ['n.deletedAt IS NULL'];
@@ -37,9 +60,12 @@ class NoticeHelper
         return self::runNoticeQuery(implode(' AND ', $where), $types, $params);
     }
 
-    // ── Shared SQL runner ─────────────────────────────────────
-    private static function runNoticeQuery(string $whereSQL, string $types, array $params): array
-    {
+    // ── Shared SQL runner ──────────────────────────────────────
+    private static function runNoticeQuery(
+        string $whereSQL,
+        string $types,
+        array  $params
+    ): array {
         $sql = "SELECT n.*,
                        nc.categoryName, nc.subCategory,
                        ns.scopeName,
@@ -55,12 +81,12 @@ class NoticeHelper
         return Database::fetchAll($sql, $types, ...$params);
     }
 
-    // ── Apply shared filter clauses ───────────────────────────
+    // ── Shared filter clauses ──────────────────────────────────
     private static function applyCommonFilters(
-        array $filters,
-        array &$where,
-        string &$types,
-        array &$params
+        array   $filters,
+        array   &$where,
+        string  &$types,
+        array   &$params
     ): void {
         if (!empty($filters['categoryID'])) {
             $where[]  = 'n.categoryID = ?';
@@ -81,17 +107,16 @@ class NoticeHelper
         }
     }
 
-    // ── Soft-delete a notice ──────────────────────────────────
+    // ── Soft-delete ────────────────────────────────────────────
     public static function softDelete(int $noticeID, int $deletedBy): bool
     {
-        $stmt = Database::query(
+        return Database::query(
             'UPDATE notices SET deletedAt = NOW(), deletedBy = ?, active = 0 WHERE noticeID = ?',
             'ii', $deletedBy, $noticeID
-        );
-        return $stmt !== false;
+        ) !== false;
     }
 
-    // ── Category/scope lookup helpers ─────────────────────────
+    // ── Lookup helpers ─────────────────────────────────────────
     public static function getCategories(): array
     {
         return Database::fetchAll(
@@ -110,13 +135,21 @@ class NoticeHelper
 
     public static function getScopes(): array
     {
-        return Database::fetchAll('SELECT * FROM notice_scopes WHERE isActive = 1');
+        return Database::fetchAll('SELECT * FROM notice_scopes WHERE isActive = 1 ORDER BY scopeID');
     }
 
-    // ── Display helpers ───────────────────────────────────────
+    /**
+     * Returns true when scopeName matches "Student Grade X" pattern.
+     */
+    public static function isGradeScope(string $scopeName): bool
+    {
+        return (bool)preg_match('/^Student Grade \d{1,2}$/', $scopeName);
+    }
+
+    // ── Display helpers ────────────────────────────────────────
     public static function categoryIcon(string $cat): string
     {
-        $map = [
+        return [
             'Academic'           => 'fa-graduation-cap',
             'Administrative'     => 'fa-building-columns',
             'Examination'        => 'fa-file-pen',
@@ -125,13 +158,12 @@ class NoticeHelper
             'Urgent / Emergency' => 'fa-triangle-exclamation',
             'Co-Curricular'      => 'fa-trophy',
             'Discipline'         => 'fa-scale-balanced',
-        ];
-        return $map[$cat] ?? 'fa-bell';
+        ][$cat] ?? 'fa-bell';
     }
 
     public static function categoryColor(string $cat): string
     {
-        $map = [
+        return [
             'Academic'           => '#4f8ef7',
             'Administrative'     => '#7c6af7',
             'Examination'        => '#f7914f',
@@ -140,8 +172,7 @@ class NoticeHelper
             'Urgent / Emergency' => '#f74f4f',
             'Co-Curricular'      => '#f7e24f',
             'Discipline'         => '#c94ff7',
-        ];
-        return $map[$cat] ?? '#aaaaaa';
+        ][$cat] ?? '#aaaaaa';
     }
 
     public static function isExpired(?string $expiryDate): bool

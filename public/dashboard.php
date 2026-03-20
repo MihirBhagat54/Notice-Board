@@ -3,9 +3,10 @@
 require_once __DIR__ . '/../app/config/config.php';
 Auth::requireLogin();
 
-$user = Auth::currentUser();
-$uid  = Auth::id();
-$role = Auth::role();
+$uid   = Auth::id();
+$role  = Auth::role();
+$user  = Auth::currentUser();
+$grade = $user['grade'] ?? null;
 
 $filters = [
     'categoryID' => Utils::getInt('categoryID') ?: null,
@@ -13,8 +14,8 @@ $filters = [
     'search'     => Utils::get('search'),
 ];
 
-$notices    = ($role === 'Admin') ? NoticeHelper::getAllNotices($filters)                   : NoticeHelper::getVisibleNotices($uid, $role, $filters);
-$allNotices = ($role === 'Admin') ? NoticeHelper::getAllNotices()                           : NoticeHelper::getVisibleNotices($uid, $role);
+$notices    = ($role === 'Admin') ? NoticeHelper::getAllNotices($filters)                   : NoticeHelper::getVisibleNotices($uid, $role, $grade, $filters);
+$allNotices = ($role === 'Admin') ? NoticeHelper::getAllNotices()                           : NoticeHelper::getVisibleNotices($uid, $role, $grade);
 $totalUrgent = count(array_filter($allNotices, fn($n) => str_contains($n['categoryName'], 'Urgent')));
 
 $catBreakdown = [];
@@ -96,7 +97,7 @@ require_once ROOT_PATH . 'app/core/header.php';
           <div class="notice-card-top">
             <div class="notice-card-meta">
               <span class="tag tag-category"><i class="fa-solid <?= NoticeHelper::categoryIcon($n['categoryName']) ?>"></i> <?= Utils::sanitize($n['subCategory']) ?></span>
-              <?php if ($role !== 'Student'): ?><span class="tag tag-scope-<?= strtolower(explode(' ',$n['scopeName'])[0]) ?>"><?= Utils::sanitize($n['scopeName']) ?></span><?php endif; ?>
+              <?php if ($role !== 'Student'): ?><span class="tag tag-scope-<?= preg_match('/^Student Grade/', $n['scopeName']) ? 'grade' : strtolower(explode(' ', $n['scopeName'])[0]) ?>"><?= Utils::sanitize($n['scopeName']) ?></span><?php endif; ?>
               <?php if ($isUrgent): ?><span class="tag tag-urgent"><i class="fa-solid fa-bolt"></i>Urgent</span><?php endif; ?>
               <?php if ($isExp):   ?><span class="tag tag-expired">Expired</span><?php endif; ?>
             </div>

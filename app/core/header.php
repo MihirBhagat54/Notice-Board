@@ -10,7 +10,7 @@ if (!$__user) { Utils::redirect('public/auth/login.php'); }
 $__totalNotices = count(
     Auth::role() === 'Admin'
         ? NoticeHelper::getAllNotices()
-        : NoticeHelper::getVisibleNotices(Auth::id(), Auth::role())
+        : NoticeHelper::getVisibleNotices(Auth::id(), Auth::role(), $__user['grade'] ?? null)
 );
 $__currentFile = basename($_SERVER['PHP_SELF']);
 ?>
@@ -69,6 +69,9 @@ $__currentFile = basename($_SERVER['PHP_SELF']);
       <div class="sidebar-section-label" style="margin-top:10px;">Notices</div>
       <?php $navLink(BASE_URL . 'public/notices/create.php',  'fa-circle-plus',    'New Notice'); ?>
       <?php $navLink(BASE_URL . 'public/notices/manage.php',  'fa-file-lines',     'Manage Notices'); ?>
+    <?php if (Auth::role() === 'Teacher'): ?>
+      <?php $navLink(BASE_URL . 'public/teacher/users.php',   'fa-user-graduate',  'My Students'); ?>
+    <?php endif; ?>
     <?php endif; ?>
 
     <?php if (Auth::role() === 'Admin'): ?>
