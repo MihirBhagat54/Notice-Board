@@ -107,7 +107,7 @@ $successFlash = Utils::flash('success');
         </div>
 
         <div style="display:flex; justify-content:flex-end; margin-bottom:22px;">
-          <a href="<?= BASE_URL ?>public/auth/forgot-password.php"
+          <a href="<?= BASE_URL ?>public/auth/forgot-password.php?reset=1"
              style="font-size:13px; color:var(--navy); font-weight:500;">
             Forgot password?
           </a>

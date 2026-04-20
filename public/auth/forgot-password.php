@@ -3,6 +3,13 @@
 require_once __DIR__ . '/../../app/config/config.php';
 if (Auth::isLoggedIn()) { Utils::redirect('public/dashboard.php'); }
 
+// If the user arrives via GET with a ?reset=1 query param (from "Try a different email"
+// or from coming back from the login page), clear the forgot-password session state
+// so they always land on the email entry step, not a stale OTP/reset step.
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['reset'])) {
+    unset($_SESSION['fp_step'], $_SESSION['fp_userID'], $_SESSION['fp_email'], $_SESSION['fp_mail_error']);
+}
+
 $step  = $_SESSION['fp_step'] ?? 'email';
 $error = '';
 $info  = '';
@@ -17,7 +24,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = 'Please enter a valid email address.';
         } else {
             $user = Database::fetchOne('SELECT * FROM users WHERE email = ? AND active = 1', 's', $email);
-            if ($user) {
+            if (!$user) {
+                $error = 'No active account found with that email address. Please check and try again.';
+            } else {
                 $otp = Auth::generateOTP(6);
                 Auth::saveOTP($user['userID'], $otp);
                 $mailResult = Auth::sendOTPEmail($user['email'], $user['fullName'], $otp);
@@ -26,11 +35,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 $_SESSION['fp_userID'] = $user['userID'];
                 $_SESSION['fp_email']  = $user['email'];
+                $_SESSION['fp_step']   = 'otp';
+                $step = 'otp';
+                $info = 'An OTP has been sent to ' . htmlspecialchars($user['email'], ENT_QUOTES) . '.';
             }
-            // Always advance (don't reveal whether email exists)
-            $_SESSION['fp_step'] = 'otp';
-            $step = 'otp';
-            $info = 'If that email is registered, an OTP has been sent to it.';
         }
     }
 
@@ -158,7 +166,7 @@ $steps = ['email' => 1, 'otp' => 2, 'reset' => 3];
           </button>
         </form>
         <p style="text-align:center;margin-top:16px;font-size:13px;">
-          <a href="<?= BASE_URL ?>public/auth/forgot-password.php" style="color:var(--navy);font-weight:500;">
+          <a href="<?= BASE_URL ?>public/auth/forgot-password.php?reset=1" style="color:var(--navy);font-weight:500;">
             <i class="fa-solid fa-arrow-left"></i> Try a different email
           </a>
         </p>

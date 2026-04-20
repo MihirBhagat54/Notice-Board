@@ -24,7 +24,7 @@ foreach ($allNotices as $n) {
 }
 arsort($catBreakdown);
 
-$categories = Database::fetchAll('SELECT DISTINCT categoryName FROM notice_categories WHERE isActive=1 ORDER BY categoryName');
+$categories = Database::fetchAll('SELECT categoryID, categoryName, subCategory FROM notice_categories WHERE isActive=1 ORDER BY categoryName');
 $scopes     = NoticeHelper::getScopes();
 $myCount    = Database::fetchOne('SELECT COUNT(*) AS c FROM notices WHERE createdBy=? AND deletedAt IS NULL','i',$uid)['c'] ?? 0;
 
@@ -64,7 +64,12 @@ require_once ROOT_PATH . 'app/core/header.php';
       <select name="categoryID" class="filter-select">
         <option value="">All Categories</option>
         <?php foreach ($categories as $c): ?>
-          <option value="<?= $c['categoryName'] ?>" <?= (Utils::get('categoryID') === $c['categoryName']) ? 'selected' : '' ?>><?= Utils::sanitize($c['categoryName']) ?></option>
+          <option 
+            value="<?= (int)$c['categoryID'] ?>"
+            <?= (Utils::getInt('categoryID') === (int)$c['categoryID']) ? 'selected' : '' ?>
+          >
+            <?= Utils::sanitize($c['categoryName'] . ' → ' . $c['subCategory']) ?>
+          </option>
         <?php endforeach; ?>
       </select>
       <?php if ($role !== 'Student'): ?>

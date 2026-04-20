@@ -8,7 +8,7 @@ $user  = Auth::currentUser();
 $grade = $user['grade'] ?? null;
 $filters = ['categoryID' => Utils::getInt('categoryID') ?: null, 'scopeID' => Utils::getInt('scopeID') ?: null, 'search' => Utils::get('search')];
 $notices    = ($role === 'Admin') ? NoticeHelper::getAllNotices($filters) : NoticeHelper::getVisibleNotices($uid, $role, $grade, $filters);
-$categories = Database::fetchAll('SELECT DISTINCT categoryName FROM notice_categories WHERE isActive=1 ORDER BY categoryName');
+$categories = Database::fetchAll('SELECT categoryID, categoryName FROM notice_categories WHERE isActive=1 ORDER BY categoryName');
 $scopes     = NoticeHelper::getScopes();
 
 $perPage = 12; $total = count($notices); $page = max(1, Utils::getInt('page', 1));
@@ -30,7 +30,7 @@ require_once ROOT_PATH . 'app/core/header.php';
   <label><i class="fa-solid fa-filter" style="margin-right:5px"></i>Filter</label>
   <select name="categoryID" class="filter-select">
     <option value="">All Categories</option>
-    <?php foreach ($categories as $c): ?><option value="<?= $c['categoryName'] ?>" <?= (Utils::get('categoryID')===$c['categoryName'])?'selected':'' ?>><?= Utils::sanitize($c['categoryName']) ?></option><?php endforeach; ?>
+    <?php foreach ($categories as $c): ?><option value="<?= (int)$c['categoryID'] ?>" <?= (Utils::getInt('categoryID')===(int)$c['categoryID'])?'selected':'' ?>><?= Utils::sanitize($c['categoryName']) ?></option><?php endforeach; ?>
   </select>
   <?php if ($role !== 'Student'): ?>
   <select name="scopeID" class="filter-select">
@@ -48,7 +48,7 @@ require_once ROOT_PATH . 'app/core/header.php';
 <?php else: ?>
   <div class="notices-grid">
     <?php foreach ($paged as $n):
-      $catColor=$n['isUrgent']=str_contains($n['categoryName'],'Urgent'); $catColor=NoticeHelper::categoryColor($n['categoryName']);
+      $isUrgent = str_contains($n['categoryName'], 'Urgent'); $catColor = NoticeHelper::categoryColor($n['categoryName']);
       $isExp=NoticeHelper::isExpired($n['expiryDate']); $isUrgent=str_contains($n['categoryName'],'Urgent');
     ?>
     <div class="notice-card fade-up <?= $isUrgent?'urgent':'' ?> <?= $isExp?'expired':'' ?>" style="--cat-color:<?= $catColor ?>">

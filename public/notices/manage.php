@@ -54,7 +54,7 @@ $notices  = Database::fetchAll(
     $types, ...$params
 );
 
-$categories = Database::fetchAll('SELECT DISTINCT categoryName FROM notice_categories WHERE isActive=1 ORDER BY categoryName');
+$categories = Database::fetchAll('SELECT categoryID, categoryName FROM notice_categories WHERE isActive=1 ORDER BY categoryName');
 $scopes     = NoticeHelper::getScopes();
 
 // Stats for this view
@@ -131,7 +131,7 @@ require_once ROOT_PATH . 'app/core/header.php';
   <select name="categoryID" class="filter-select">
     <option value="">All Categories</option>
     <?php foreach ($categories as $c): ?>
-      <option value="<?= $c['categoryName'] ?>" <?= (Utils::get('categoryID') === $c['categoryName']) ? 'selected' : '' ?>>
+      <option value="<?= (int)$c['categoryID'] ?>" <?= (Utils::getInt('categoryID') === (int)$c['categoryID']) ? 'selected' : '' ?>>
         <?= Utils::sanitize($c['categoryName']) ?>
       </option>
     <?php endforeach; ?>
