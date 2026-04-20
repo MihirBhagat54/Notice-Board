@@ -111,28 +111,40 @@ class Auth
         return str_pad((string)random_int(0, (int)(10 ** $digits) - 1), $digits, '0', STR_PAD_LEFT);
     }
 
-    public static function saveOTP(int $userID, string $otp): bool
-    {
-        Database::query('UPDATE otp_tokens SET used = 1 WHERE userID = ? AND used = 0', 'i', $userID);
-        $expiry = date('Y-m-d H:i:s', strtotime('+' . OTP_EXPIRY_MINUTES . ' minutes'));
-        return Database::query(
-            'INSERT INTO otp_tokens (userID, otp, expiresAt) VALUES (?, ?, ?)',
-            'iss', $userID, $otp, $expiry
-        ) !== false;
-    }
+public static function saveOTP(int $userID, string $otp): bool
+{
+    // Invalidate old tokens
+    Database::query('UPDATE otp_tokens SET used = 1 WHERE userID = ? AND used = 0', 'i', $userID);
+    
+    // Use INTERVAL to let MySQL handle the time math
+    return Database::query(
+        'INSERT INTO otp_tokens (userID, otp, expiresAt) 
+         VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ' . (int)OTP_EXPIRY_MINUTES . ' MINUTE))',
+        'is', $userID, $otp
+    ) !== false;
+}
 
-    public static function verifyOTP(int $userID, string $otp): bool
-    {
-        $row = Database::fetchOne(
-            'SELECT tokenID FROM otp_tokens
-             WHERE userID = ? AND otp = ? AND used = 0 AND expiresAt > NOW()
-             ORDER BY createdAt DESC LIMIT 1',
-            'is', $userID, $otp
-        );
-        if (!$row) return false;
-        Database::query('UPDATE otp_tokens SET used = 1 WHERE tokenID = ?', 'i', $row['tokenID']);
-        return true;
+public static function verifyOTP(int $userID, string $otp): bool
+{
+    // 1. Attempt to fetch the matching, unused, and non-expired token
+    $row = Database::fetchOne(
+        'SELECT tokenID FROM otp_tokens 
+         WHERE userID = ? AND otp = ? AND used = 0 AND expiresAt > NOW()
+         ORDER BY createdAt DESC LIMIT 1',
+        'is', $userID, $otp
+    );
+    // 2. If no record is found, return false immediately
+    if (!$row) {
+        return false;
     }
+    // 3. Mark the token as used so it cannot be reused
+    $updated = Database::query(
+        'UPDATE otp_tokens SET used = 1 WHERE tokenID = ?', 
+        'i', $row['tokenID']
+    );
+    // 4. Return true if the update was successful, otherwise false
+    return $updated !== false;
+}
 
     // ── Email sending ────────────────────────────────────────────
     //
